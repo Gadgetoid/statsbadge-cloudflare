@@ -47,6 +47,11 @@ FETCH_POLL = 1.0
 LIVE_MINUTES = 5
 LIVE_LAG_MINUTES = 1
 
+# What this says when it has not been given a token. Not counted as a fault - an extension
+# nobody has configured is not broken - but worth showing, since a silent source reporting
+# nothing looks the same as one that is not installed.
+UNSET = "no API token set"
+
 # Where the domain list is kept between runs, so the checkboxes are there before the first
 # fetch lands and a save made while the network is down keeps the ones already ticked.
 ZONES = "zones"
@@ -185,6 +190,11 @@ class Cloudflare(Source):
         """
         super().configure(settings)
         self._read_settings()
+        if self.last_fault == UNSET and self.token:
+            # That message was about the setting, and it has just been given. Waiting for a
+            # fetch to succeed before withdrawing it leaves the config page saying a token
+            # is missing for as long as the first request takes.
+            self.last_fault = None
         self._next = 0.0
         self._next_zones = 0.0
         self._wake.set()
@@ -301,7 +311,7 @@ class Cloudflare(Source):
             # Not a fault: an extension nobody has given a token to is unconfigured, and
             # counting that would report a broken source on every host that installed it.
             # The line is still worth showing, since the alternative is a silent source.
-            self.last_fault = "no API token set"
+            self.last_fault = UNSET
             return
         now = time.monotonic()
         if now >= self._next_zones:
