@@ -102,6 +102,7 @@ QUERY_TAIL = "  }\n}\n"
 
 class Cloudflare(Source):
     name = "cloudflare"
+    label = "Cloudflare"
 
     settings = (
         {"key": "api_token", "label": "API token", "type": "text",
@@ -198,7 +199,9 @@ class Cloudflare(Source):
         groups = {f"cf_{zone['slug']}": {"label": zone["name"], "fields": dict(FIELDS)}
                   for zone in self._watched}
         if self._watched:
-            groups[TOTALS] = {"label": "Cloudflare, all domains",
+            # Named for what it is rather than for the account, the picker heading it
+            # sits under already being Cloudflare's.
+            groups[TOTALS] = {"label": "All domains",
                               "fields": {**TOTAL_FIELDS,
                                          "zones": {"label": "Domains watched"}}}
         self.groups = groups
