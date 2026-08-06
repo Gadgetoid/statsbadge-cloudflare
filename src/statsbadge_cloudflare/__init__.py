@@ -29,12 +29,10 @@ from statsbadge.sources.base import Source
 
 API = "https://api.cloudflare.com/client/v4"
 
-# How often the readings are asked for, unless the setting says otherwise. The live window
-# is a minute's resolution, so nothing is gained by asking faster, and the GraphQL API's
-# limit is 300 queries in five minutes however many domains are in each one.
-DEFAULT_EVERY = 60.0
-MIN_EVERY = 30.0
-MAX_EVERY = 3600.0
+# How often the readings are asked for. Not a setting: the live window is a minute's
+# resolution, so asking faster returns the same figures, and asking slower only makes them
+# older - one query a minute against a limit of 300 in five is not a budget worth managing.
+EVERY = 60.0
 # The domain list changes when somebody adds a site, which is not something to poll for.
 ZONES_EVERY = 3600.0
 # A failure waits this long rather than the whole interval, and rather than never.
@@ -129,11 +127,9 @@ class Cloudflare(Source):
          "hint": "A token with Zone / Zone / Read to list the domains and "
                  "Zone / Analytics / Read for their traffic. Made at "
                  "dash.cloudflare.com/profile/api-tokens"},
-        {"key": "every", "label": "Ask every", "type": "number",
-         "default": int(DEFAULT_EVERY),
-         "hint": "Seconds. The live figures are by the minute, so there is nothing to be "
-                 "had from asking faster"},
     )
+
+    every = EVERY
 
     @classmethod
     def available(cls):
@@ -209,11 +205,6 @@ class Cloudflare(Source):
         has been asked what it holds.
         """
         self.token = str(self.config.get("api_token") or "").strip()
-        try:
-            every = float(self.config.get("every") or DEFAULT_EVERY)
-        except (TypeError, ValueError):
-            every = DEFAULT_EVERY
-        self.every = max(MIN_EVERY, min(MAX_EVERY, every))
 
         with self._lock:
             zones = list(self._zones)

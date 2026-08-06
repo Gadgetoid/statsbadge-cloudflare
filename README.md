@@ -32,7 +32,6 @@ Include every zone you want to see. The token is stored in the host's config fil
 | Setting | What it does |
 | ------- | ------------ |
 | API token | The token above |
-| Ask every | Seconds between requests. 60 by default; the live figures are by the minute, so asking faster gets you nothing |
 | One per domain | Whether to watch it. Untick what you are not going to draw |
 
 ## What each domain reports
