@@ -66,11 +66,14 @@ BYTES_FLOOR = 4096.0
 # has. Fields are named the same in every group on purpose: the host keys units and scales
 # by the field name, so one name means one unit whichever domain it is read from.
 FIELDS = {
-    "requests": {"label": "Requests / min", "unit": "/min", "graphed": True,
+    # `history` rather than `graphed`: the collector would sample these at its own rate, and
+    # ninety samples of a reading fetched once a minute is a minute and a half of staircase.
+    # Cloudflare reports by the hour, so `series()` hands over a day of them instead.
+    "requests": {"label": "Requests / min", "unit": "/min", "history": True,
                  "peak": True, "peak_floor": REQUESTS_FLOOR},
-    "bytes_bps": {"label": "Served", "unit": "B/s", "graphed": True,
+    "bytes_bps": {"label": "Served", "unit": "B/s", "history": True,
                   "peak": True, "peak_floor": BYTES_FLOOR},
-    "cached_pct": {"label": "Cached %", "unit": "%", "percent": True, "graphed": True},
+    "cached_pct": {"label": "Cached %", "unit": "%", "percent": True, "history": True},
     "requests_today": {"label": "Requests today"},
     "pageviews_today": {"label": "Page views today"},
     "uniques_today": {"label": "Unique visitors today"},
@@ -83,6 +86,12 @@ FIELDS = {
 TOTAL_FIELDS = {name: entry for name, entry in FIELDS.items() if name != "uniques_today"}
 TOTALS = "cloudflare"
 
+# A day of hourly buckets, which is what a graph of this is worth drawing from. The newest
+# is the hour in progress and is dropped: a bucket a few minutes into its hour reads as
+# traffic falling off a cliff, which is the shape of a partial count and not of a day.
+HOURS = 24
+HOUR_MS = 3600 * 1000
+
 # One selection per domain, aliased so the tag never has to be written into the query.
 QUERY_HEAD = "query({args}) {{\n  viewer {{\n"
 QUERY_ZONE = """    {alias}: zones(filter: {{zoneTag: ${alias}}}) {{
@@ -94,6 +103,12 @@ QUERY_ZONE = """    {alias}: zones(filter: {{zoneTag: ${alias}}}) {{
       today: httpRequests1dGroups(limit: 1, filter: {{date_geq: $today}}) {{
         sum {{ requests bytes cachedRequests threats pageViews }}
         uniq {{ uniques }}
+      }}
+      hourly: httpRequests1hGroups(
+          limit: {hours}, filter: {{datetime_geq: $hour_from, datetime_lt: $hour_to}},
+          orderBy: [datetime_ASC]) {{
+        dimensions {{ datetime }}
+        sum {{ requests bytes cachedRequests }}
       }}
     }}
 """
@@ -126,6 +141,10 @@ class Cloudflare(Source):
         # the lock.
         self._zones = []
         self._readings = {}
+        # A day of hourly points per group, and the hour they run up to. What a graph of
+        # any of this is drawn from: the readings above are one moment, these are the shape.
+        self._hourly = {}
+        self._hourly_to = None
         self._lock = threading.Lock()
         self._next = 0.0
         self._next_zones = 0.0
@@ -196,12 +215,15 @@ class Cloudflare(Source):
             {"key": f"zone_{zone['slug']}", "label": zone["name"], "type": "bool",
              "default": watch_by_default}
             for zone in zones)
-        groups = {f"cf_{zone['slug']}": {"label": zone["name"], "fields": dict(FIELDS)}
+        # Slow, every one of them: the readings are fetched once a minute and the badge
+        # polls once a second, so they travel when they change and not sixty times over.
+        groups = {f"cf_{zone['slug']}": {"label": zone["name"], "slow": True,
+                                         "fields": dict(FIELDS)}
                   for zone in self._watched}
         if self._watched:
             # Named for what it is rather than for the account, the picker heading it
             # sits under already being Cloudflare's.
-            groups[TOTALS] = {"label": "All domains",
+            groups[TOTALS] = {"label": "All domains", "slow": True,
                               "fields": {**TOTAL_FIELDS,
                                          "zones": {"label": "Domains watched"}}}
         self.groups = groups
@@ -220,6 +242,33 @@ class Cloudflare(Source):
             frame[group] = values
         if readings:
             frame[TOTALS] = _totals(readings)
+
+    def series(self):
+        """A day of hourly points per watched domain, and the same summed across them.
+
+        The collector would otherwise sample these at its own rate, and ninety samples of a
+        reading fetched once a minute is a minute and a half of staircase. Cloudflare reports
+        by the hour, so this is a day of real shape instead - and it says so, since a plot
+        walked by a number counted in the host's own samples would slide a year an hour.
+        """
+        with self._lock:
+            hourly = {group: dict(hours) for group, hours in self._hourly.items()
+                      if group in self.groups}
+            hour_to = self._hourly_to
+        if not hourly or hour_to is None:
+            return {}
+        age_ms = max(0, int((datetime.datetime.now(datetime.timezone.utc)
+                             - hour_to).total_seconds() * 1000))
+        out = {}
+        for group, fields in hourly.items():
+            for field, points in fields.items():
+                out[f"{group}.{field}"] = {"points": points, "every_ms": HOUR_MS,
+                                           "age_ms": age_ms}
+        totals = _total_hours(hourly)
+        for field, points in totals.items():
+            out[f"{TOTALS}.{field}"] = {"points": points, "every_ms": HOUR_MS,
+                                        "age_ms": age_ms}
+        return out
 
     def note_fault(self, exc):
         """What Cloudflare said, without a type name in front of it.
@@ -309,27 +358,37 @@ class Cloudflare(Source):
                .replace(second=0, microsecond=0)
                - datetime.timedelta(minutes=LIVE_LAG_MINUTES))
         start = end - datetime.timedelta(minutes=LIVE_MINUTES)
+        # Whole hours only, ending at the last one that finished.
+        hour_to = end.replace(minute=0)
+        hour_from = hour_to - datetime.timedelta(hours=HOURS)
         variables = {"from": _stamp(start), "to": _stamp(end),
-                     "today": end.strftime("%Y-%m-%d")}
+                     "today": end.strftime("%Y-%m-%d"),
+                     "hour_from": _stamp(hour_from), "hour_to": _stamp(hour_to)}
         aliases = []
         for index, zone in enumerate(watched):
             alias = f"z{index}"
             aliases.append(alias)
             variables[alias] = zone["id"]
 
-        declared = ", ".join(["$from: Time!", "$to: Time!", "$today: Date!"]
+        declared = ", ".join(["$from: Time!", "$to: Time!", "$today: Date!",
+                              "$hour_from: Time!", "$hour_to: Time!"]
                              + [f"${alias}: String!" for alias in aliases])
         query = (QUERY_HEAD.format(args=declared)
-                 + "".join(QUERY_ZONE.format(alias=alias) for alias in aliases)
+                 + "".join(QUERY_ZONE.format(alias=alias, hours=HOURS)
+                           for alias in aliases)
                  + QUERY_TAIL)
         answer = self._graphql(query, variables)
 
         viewer = (answer.get("data") or {}).get("viewer") or {}
-        readings = {}
+        readings, hourly = {}, {}
         for alias, zone in zip(aliases, watched, strict=True):
             found = viewer.get(alias) or ()
             if found:
                 readings[f"cf_{zone['slug']}"] = _zone_reading(found[0])
+                hourly[f"cf_{zone['slug']}"] = _zone_hours(found[0], hour_from)
+        with self._lock:
+            self._hourly = hourly
+            self._hourly_to = hour_to
         # Partial answers are the normal shape of a failure here: a dataset one plan has
         # and another does not comes back as an error beside the zones that did answer, so
         # what did arrive is kept and the reason is reported.
@@ -391,6 +450,72 @@ def _zone_reading(found):
         "bytes_today_mb": (round(bytes_today / (1024.0 * 1024.0), 1)
                            if bytes_today is not None else None),
     }
+
+
+def _zone_hours(found, hour_from):
+    """One zone's hourly buckets as the three fields a plot can draw, oldest first.
+
+    Placed by their timestamps rather than taken in the order they arrived: an hour with no
+    traffic at all is a bucket the API leaves out, and packing what is left would draw a
+    quiet night as though it had never happened. A missing hour is None, which is what a
+    plot needs to draw a gap where there was no reading.
+    """
+    by_hour = {}
+    for row in found.get("hourly") or ():
+        stamp = (row.get("dimensions") or {}).get("datetime")
+        if not stamp:
+            continue
+        try:
+            when = datetime.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=datetime.timezone.utc)
+        except ValueError:
+            continue
+        index = int((when - hour_from).total_seconds() // 3600)
+        if 0 <= index < HOURS:
+            by_hour[index] = row.get("sum") or {}
+
+    requests, served, cached = [], [], []
+    for index in range(HOURS):
+        sums = by_hour.get(index)
+        if sums is None:
+            requests.append(None)
+            served.append(None)
+            cached.append(None)
+            continue
+        count = sums.get("requests")
+        hit = sums.get("cachedRequests")
+        # Per minute and per second, the same units the live readings are in: one field
+        # means one unit whether it is being read now or plotted from an hour ago.
+        requests.append(None if count is None else round(count / 60.0, 1))
+        served.append(None if sums.get("bytes") is None
+                      else round(sums["bytes"] / 3600.0))
+        cached.append(round(100.0 * hit / count, 1)
+                      if count and hit is not None else None)
+    return {"requests": requests, "bytes_bps": served, "cached_pct": cached}
+
+
+def _total_hours(hourly):
+    """The same three, added across every watched domain, hour by hour."""
+    totals = {}
+    for field in ("requests", "bytes_bps"):
+        added = []
+        for index in range(HOURS):
+            known = [fields[field][index] for fields in hourly.values()
+                     if fields.get(field) and fields[field][index] is not None]
+            added.append(round(sum(known), 1) if known else None)
+        totals[field] = added
+    # A percentage of percentages is not a sum, so the hit rate comes back off the requests
+    # behind it, the same way the live one does.
+    rate = []
+    for index in range(HOURS):
+        served = sum((fields["requests"][index] or 0)
+                     for fields in hourly.values() if fields.get("requests"))
+        hit = sum((fields["requests"][index] or 0) * (fields["cached_pct"][index] or 0)
+                  / 100.0
+                  for fields in hourly.values() if fields.get("cached_pct"))
+        rate.append(round(100.0 * hit / served, 1) if served else None)
+    totals["cached_pct"] = rate
+    return totals
 
 
 def _totals(readings):

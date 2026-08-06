@@ -50,7 +50,7 @@ Include every zone you want to see. The token is stored in the host's config fil
 
 The totals source has all of these bar unique visitors, plus how many domains are being watched. A visitor to two of your sites is two uniques, so summing them counts nobody in particular.
 
-Requests and bytes are kept as history, so a graph or sparkline of either draws something the moment you add the page, and both are scaled by the busiest they have been seen - there is no such thing as a full one otherwise.
+Requests, bytes and the cache hit rate are graphable, and the history is Cloudflare's own: **a day of hourly points**, so a graph shows the shape of a day rather than the last ninety seconds. It is there the moment you add the page, and requests and bytes are scaled by the busiest they have been seen, there being no such thing as a full one otherwise.
 
 ## Notes
 
@@ -59,6 +59,12 @@ The names come from the REST API and the numbers from GraphQL, both under `api.c
 Live figures come from `httpRequestsAdaptiveGroups`, which reports by the minute and is current to about a minute. Its count is already corrected for sampling: measured against the hourly dataset over the same hour, the two agree to within a percent. The window ends a minute back, because the newest minute is still being written.
 
 The daily figures are today so far in UTC, not a rolling twenty-four hours, which is what Cloudflare's own dashboard shows for the day.
+
+The graph's points are hourly buckets, oldest to newest, with the hour in progress left off: a bucket a few minutes into its hour reads as traffic falling off a cliff, which is the shape of a partial count and not of a day. An hour with no traffic at all is a bucket Cloudflare leaves out, and it is drawn as a gap rather than closed up.
+
+Requests are per minute and bytes per second whether they are being read now or plotted from an hour ago, so the reading beside a sparkline is in the units the line is drawn in.
+
+These readings change once a minute and the badge polls once a second, so they are declared slow: the host sends them when they change and the badge holds on to them in between. Watching six domains costs about 1.7KB a second on the wire without that, and nothing with it.
 
 One request covers every domain at once, however many are ticked, so the GraphQL API's limit of 300 queries in five minutes is nowhere in sight at a request a minute.
 
