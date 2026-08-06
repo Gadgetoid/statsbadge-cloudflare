@@ -1,0 +1,35 @@
+# The rules statsbadge itself is checked against, minus the badge builtins: nothing here
+# runs on the badge.
+
+lint.select = [
+    "F",
+    "Q",
+    "W",
+    "E",
+    "B",
+    "COM",
+    "BLE",
+    "C4",
+    "ISC",
+    "ICN",
+    "PIE",
+    "RSE",
+    "RET",
+    "SLF",
+    "ARG"
+]
+
+lint.ignore = [
+    "E501",
+    "E402",
+    "COM812",
+    "ICN001"
+]
+
+lint.extend-select = ["UP"]
+
+[lint.per-file-ignores]
+# A source wraps whatever it reads, because a feed that is down has to degrade to a missing
+# field rather than take the collector down - that is the contract in sources/base.py.
+# `dt` is part of the sample() signature whether or not a source needs a rate.
+"src/statsbadge_cloudflare/__init__.py" = ["BLE001", "ARG002"]

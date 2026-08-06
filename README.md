@@ -1,0 +1,65 @@
+# statsbadge-cloudflare
+
+Your Cloudflare traffic as readings, for [statsbadge](https://github.com/pimoroni/statsbadge).
+
+Every domain on the account becomes a source you can point a page at: requests a minute, bytes a second, cache hit rate, and the day's totals. There is a **Cloudflare, all domains** source too, for a page that wants one number for everything.
+
+No page of its own and nothing to install on the badge - these are readings, so the built-in dials, graphs, sparklines and text pages draw them.
+
+## Install
+
+```bash
+statsbadge ext add cloudflare
+```
+
+Then, in the config UI under **Extensions**, paste an API token. The domains appear as checkboxes on the next reload, and each one that is ticked becomes a source in the field pickers.
+
+Up to eight domains are ticked to begin with. Past that they start unticked, because a domain is about 560 bytes in the frame the badge fetches every second, against 832 bytes for everything a host reports about itself.
+
+## The token
+
+Make one at [dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens) with two permissions:
+
+| Permission | What it is for |
+| ---------- | -------------- |
+| Zone / Zone / Read | listing the domains. It is the only place their names exist |
+| Zone / Analytics / Read | the traffic |
+
+Include every zone you want to see. The token is stored in the host's config file in plain text, like every other extension setting, so give it nothing beyond these two.
+
+## Settings
+
+| Setting | What it does |
+| ------- | ------------ |
+| API token | The token above |
+| Ask every | Seconds between requests. 60 by default; the live figures are by the minute, so asking faster gets you nothing |
+| One per domain | Whether to watch it. Untick what you are not going to draw |
+
+## What each domain reports
+
+| Reading | What it is |
+| ------- | ---------- |
+| Requests / min | Averaged over the last five minutes |
+| Served | Bytes a second over the same five minutes |
+| Cached % | Of today's requests, how many the edge answered |
+| Requests today | Today so far, in UTC |
+| Page views today | |
+| Unique visitors today | |
+| Threats today | What Cloudflare blocked or challenged |
+| Served today | |
+
+The totals source has all of these bar unique visitors, plus how many domains are being watched. A visitor to two of your sites is two uniques, so summing them counts nobody in particular.
+
+Requests and bytes are kept as history, so a graph or sparkline of either draws something the moment you add the page, and both are scaled by the busiest they have been seen - there is no such thing as a full one otherwise.
+
+## Notes
+
+The names come from the REST API and the numbers from GraphQL, both under `api.cloudflare.com/client/v4` and both on the same token. Zone Analytics' own REST endpoint refuses an account-owned token outright and names GraphQL as its replacement, so that is the one used.
+
+Live figures come from `httpRequestsAdaptiveGroups`, which reports by the minute and is current to about a minute. Its count is already corrected for sampling: measured against the hourly dataset over the same hour, the two agree to within a percent. The window ends a minute back, because the newest minute is still being written.
+
+The daily figures are today so far in UTC, not a rolling twenty-four hours, which is what Cloudflare's own dashboard shows for the day.
+
+One request covers every domain at once, however many are ticked, so the GraphQL API's limit of 300 queries in five minutes is nowhere in sight at a request a minute.
+
+The domain list is kept between runs, so the checkboxes are there before the first fetch lands and a save made while the network is down does not lose which ones you had ticked.
