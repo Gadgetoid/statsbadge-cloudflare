@@ -120,7 +120,7 @@ class Cloudflare(Source):
     label = "Cloudflare"
 
     settings = (
-        {"key": "api_token", "label": "API token", "type": "text",
+        {"key": "api_token", "label": "API token", "type": "text", "secret": True,
          "hint": "A token with Zone / Zone / Read to list the domains and "
                  "Zone / Analytics / Read for their traffic. Made at "
                  "dash.cloudflare.com/profile/api-tokens"},
