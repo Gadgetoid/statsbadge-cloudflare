@@ -563,7 +563,7 @@ def _errors_in(body):
 def _first_error(errors):
     """The first thing Cloudflare complained about, as a line.
 
-    Both APIs answer with a list of them, and the first is the one worth showing: the rest
+    Both APIs answer with a list, and the first is the one worth showing: the rest
     are usually the same complaint about the next zone along.
     """
     for error in errors or ():

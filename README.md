@@ -2,9 +2,7 @@
 
 Your Cloudflare traffic as readings, for [statsbadge](https://github.com/pimoroni/statsbadge).
 
-Every domain on the account becomes a source you can point a page at: requests a minute, bytes a second, cache hit rate, and the day's totals. There is a **Cloudflare, all domains** source too, for a page that wants one number for everything.
-
-No page of its own and nothing to install on the badge - these are readings, so the built-in dials, graphs, sparklines and text pages draw them.
+Every domain on your account becomes a source you can point a page at: requests a minute, bytes a second, cache hit rate, and the day's totals. There is a **Cloudflare, all domains** source too, for a page that wants one number for everything.
 
 ## Install
 
@@ -14,7 +12,7 @@ statsbadge ext add cloudflare
 
 Then, in the config UI under **Extensions**, paste an API token. The domains appear as checkboxes on the next reload, and each one that is ticked becomes a source in the field pickers.
 
-Up to eight domains are ticked to begin with. Past that they start unticked, because a domain is about 560 bytes in the frame the badge fetches every second, against 832 bytes for everything a host reports about itself.
+Up to eight domains are ticked by default, keeping the payload small.
 
 ## The token
 
@@ -25,7 +23,7 @@ Make one at [dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com
 | Zone / Zone / Read | listing the domains. It is the only place their names exist |
 | Zone / Analytics / Read | the traffic |
 
-Include every zone you want to see. The token is stored in the host's config file in plain text, like every other extension setting, so give it nothing beyond these two.
+Include every zone you want to see. The token is stored in the host's config file in plain text.
 
 ## Settings
 
@@ -49,7 +47,7 @@ Include every zone you want to see. The token is stored in the host's config fil
 
 The totals source has all of these bar unique visitors, plus how many domains are being watched. A visitor to two of your sites is two uniques, so summing them counts nobody in particular.
 
-Requests, bytes and the cache hit rate are graphable, and the history is Cloudflare's own: **a day of hourly points**, so a graph shows the shape of a day rather than the last ninety seconds. It is there the moment you add the page, and requests and bytes are scaled by the busiest they have been seen, there being no such thing as a full one otherwise.
+Requests, bytes and the cache hit rate are graphable, and the history is Cloudflare's: **a day of hourly points**, so a graph shows the shape of a day rather than the last ninety seconds. It is there the moment you add the page, and requests and bytes are scaled vertically to fill up the graph.
 
 ## Notes
 
