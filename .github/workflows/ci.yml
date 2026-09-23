@@ -1,54 +1,16 @@
 name: CI
 
+# Lint, build and test against statsbadge from source, by statsbadge's own rules. The steps
+# are statsbadge's, so every extension is checked the same way.
 on:
   push:
     branches: [main]
   pull_request:
-  release:
-    types: [published]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-env:
-  UV_VERSION: "0.9.2"
-
 jobs:
   check:
-    name: Lint and build
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v7
-
-      # setup-uv publishes no v9 tag, only exact versions
-      - uses: astral-sh/setup-uv@v9.0.0
-        with:
-          version: ${{ env.UV_VERSION }}
-          enable-cache: true
-
-      # statsbadge's own rules, minus the badge builtins: nothing here runs on the badge.
-      # Ruff reads the source rather than importing it, so this needs no statsbadge.
-      - name: Lint
-        run: uvx --from "ruff>=0.6" ruff check --config ci/ruff.toml src
-
-      - run: uv build
-
-      # The entry point is the whole mechanism: a typo in it is a package that installs and
-      # provides nothing, and nothing says so.
-      - name: Check the entry point is registered
-        run: |
-          uv venv /tmp/check
-          uv pip install --python /tmp/check/bin/python --no-deps dist/*.whl
-          /tmp/check/bin/python - <<'PY'
-          from importlib.metadata import entry_points
-          found = {e.name: e.value for e in entry_points(group="statsbadge.sources")}
-          assert found.get("cloudflare") == "statsbadge_cloudflare:Cloudflare", found
-          print("entry point:", found)
-          PY
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: dist
-          path: dist/*
+    uses: pimoroni/statsbadge/.github/workflows/extension.yml@main

@@ -1,13 +1,9 @@
 name: Publish
 
-# Publishes statsbadge-cloudflare to PyPI on a published release, using trusted publishing:
-# PyPI trusts this workflow via OIDC, so there is no long-lived API token to store or leak.
-# Configure it once at pypi.org/manage/project/statsbadge-cloudflare/settings/publishing/
-# with this repository, this workflow filename, and the `pypi` environment.
-#
-# One package in this repository, so the tags are plain vN.N.N and there is no prefix to
-# match on - the extensions vendored in pimoroni/statsbadge each carry one because four
-# packages share that repository and every release fires every workflow.
+# Trusted publishing, so PyPI trusts this workflow over OIDC and no API token is stored
+# here. Configure it once at pypi.org/manage/project/statsbadge-cloudflare/settings/publishing/
+# with this repository, this filename and the `pypi` environment. The build is
+# statsbadge's; the publish has to stay here, since PyPI trusts a file by name.
 on:
   release:
     types: [published]
@@ -17,40 +13,26 @@ permissions:
   contents: read
 
 jobs:
+  build:
+    uses: pimoroni/statsbadge/.github/workflows/extension-build.yml@main
+
   publish:
-    name: Build and publish to PyPI
+    name: Publish to PyPI
+    needs: build
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
       id-token: write # for trusted publishing
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
-          # The tag is the version, so the build has to be able to see it. A checkout of a tag
-          # has it at HEAD either way; this keeps a run from a branch honest too.
-          fetch-depth: 0
+          name: dist
+          path: dist
 
-      # setup-uv publishes no v9 tag, only exact versions
-      - uses: astral-sh/setup-uv@v9.0.0
+      # setup-uv publishes exact versions only, no major tag
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
-          version: "0.9.2"
+          version: "0.12.18"
 
-      - run: uv build
-
-      # A build that cannot see the tag produces 0.0.0.postN.devN+hash rather than failing,
-      # so what came out is checked against what was asked for. Skipped for a dispatch from
-      # a branch, where the ref is not a version at all.
-      - name: Check the built version is the tag
-        run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          BUILT="$(ls dist/*.whl | head -1 | cut -d- -f2)"
-          echo "tag=$TAG built=$BUILT"
-          if [ "$GITHUB_REF_NAME" != "$TAG" ] && [ "$TAG" != "$BUILT" ]; then
-            echo "::error::built $BUILT from tag $TAG - check whether the checkout could"
-            echo "::error::see the tag at all"
-            exit 1
-          fi
-
-      - name: Publish
-        run: uv publish --trusted-publishing always
+      - run: uv publish --trusted-publishing always dist/*
