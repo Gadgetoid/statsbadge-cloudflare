@@ -22,10 +22,9 @@ import json
 import re
 import threading
 import time
-import urllib.error
-import urllib.request
 
-from statsbadge.sources.base import Source
+from statsbadge.sources import web
+from statsbadge.sources.base import PollingSource, SourceError
 
 API = "https://api.cloudflare.com/client/v4"
 
@@ -37,7 +36,6 @@ EVERY = 60.0
 ZONES_EVERY = 3600.0
 # A failure waits this long rather than the whole interval, and rather than never.
 RETRY_AFTER = 60.0
-FETCH_POLL = 1.0
 
 # What "now" covers. The most recent minute is still being written, so the window ends a
 # minute back; five of them is enough that a quiet site reads as a rate rather than as a
@@ -118,7 +116,7 @@ QUERY_ZONE = """    {alias}: zones(filter: {{zoneTag: ${alias}}}) {{
 QUERY_TAIL = "  }\n}\n"
 
 
-class Cloudflare(Source):
+class Cloudflare(PollingSource):
     name = "cloudflare"
     label = "Cloudflare"
 
@@ -149,9 +147,6 @@ class Cloudflare(Source):
         self._lock = threading.Lock()
         self._next = 0.0
         self._next_zones = 0.0
-        self._fetcher = None
-        self._wake = threading.Event()
-        self._stop = threading.Event()
         self._read_settings()
 
     # -- lifecycle ----------------------------------------------------------
@@ -165,18 +160,7 @@ class Cloudflare(Source):
         with self._lock:
             self._zones = [dict(zone) for zone in (self.store.get(ZONES) or ())]
         self._read_settings()
-        if self._fetcher is None:
-            self._stop.clear()
-            self._fetcher = threading.Thread(target=self._fetch_loop, daemon=True,
-                                             name="statsbadge-cloudflare")
-            self._fetcher.start()
-
-    def stop(self):
-        self._stop.set()
-        self._wake.set()
-        if self._fetcher is not None:
-            self._fetcher.join(timeout=2.0)
-            self._fetcher = None
+        super().start()
 
     def configure(self, settings):
         """Take settings while running, and ask again rather than waiting out the interval.
@@ -186,14 +170,11 @@ class Cloudflare(Source):
         """
         super().configure(settings)
         self._read_settings()
-        if self.last_fault == UNSET and self.token:
-            # That message was about the setting, and it has just been given. Waiting for a
-            # fetch to succeed before withdrawing it leaves the config page saying a token
-            # is missing for as long as the first request takes.
-            self.last_fault = None
+        if self.token:
+            self.note_ok("setup")
         self._next = 0.0
         self._next_zones = 0.0
-        self._wake.set()
+        self.wake()
 
     # -- what this source offers --------------------------------------------
 
@@ -271,60 +252,37 @@ class Cloudflare(Source):
                                         "age_ms": age_ms}
         return out
 
-    def note_fault(self, exc):
-        """What Cloudflare said, without a type name in front of it.
-
-        `readable` names the type of anything it does not recognise, which is right for a
-        fault nobody expected and wrong for a message written to be read: the alternative
-        here is "CloudflareError: HTTP 403: ...", which says it twice.
-        """
-        if isinstance(exc, CloudflareError):
-            self.faults += 1
-            self.last_fault = str(exc)
-            return
-        super().note_fault(exc)
-
     # -- fetching -----------------------------------------------------------
 
-    def _fetch_loop(self):
-        while not self._stop.is_set():
-            try:
-                self._refresh()
-            except Exception as exc:
-                # The fetcher must not die, or the readings would stand at whatever they
-                # last were with nothing ever replacing them.
-                self.note_fault(exc)
-            self._wake.wait(FETCH_POLL)
-            self._wake.clear()
-
-    def _refresh(self):
+    def poll(self):
         if not self.token:
             # Not a fault: an extension nobody has given a token to is unconfigured, and
             # counting that would report a broken source on every host that installed it.
             # The line is still worth showing, since the alternative is a silent source.
-            self.last_fault = UNSET
+            self.note_waiting(UNSET, key="setup")
             return
         now = time.monotonic()
         if now >= self._next_zones:
             try:
                 self._refresh_zones()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 self._next_zones = now + RETRY_AFTER
-                self.note_fault(exc)
+                self.note_fault(exc, key="zones")
                 return
             self._next_zones = time.monotonic() + ZONES_EVERY
+            self.note_ok("zones")
         if now < self._next:
             return
         try:
             readings = self._fetch_readings()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             self._next = time.monotonic() + RETRY_AFTER
-            self.note_fault(exc)
+            self.note_fault(exc, key="readings")
             return
         with self._lock:
             self._readings = readings
         self._next = time.monotonic() + self.every
-        self.note_ok()
+        self.note_ok("readings")
 
     def _refresh_zones(self):
         """The domains on the account, by name. Kept, so the next run starts with them."""
@@ -410,23 +368,11 @@ class Cloudflare(Source):
         return self._request(f"{API}/graphql", payload)
 
     def _request(self, url, payload=None):
-        request = urllib.request.Request(url, data=payload, headers={
-            "Authorization": f"Bearer {self.token}",
-            "Content-Type": "application/json",
-        })
-        try:
-            with urllib.request.urlopen(request, timeout=15) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            # The status alone says nothing useful: a token missing one permission is a
-            # 403 whose body names the permission.
-            detail = _first_error(_errors_in(exc.read()))
-            if not detail:
-                raise
-            raise CloudflareError(f"HTTP {exc.code}: {detail}") from exc
+        return web.fetch_json(url, data=payload, explain=_said, headers={
+            "Authorization": f"Bearer {self.token}", "Content-Type": "application/json"})
 
 
-class CloudflareError(Exception):
+class CloudflareError(SourceError):
     """What Cloudflare said was wrong, as one line for the config UI to show."""
 
 
@@ -553,11 +499,13 @@ def _stamp(when):
     return when.strftime("%Y-%m-%dT%H:%M:00Z")
 
 
-def _errors_in(body):
-    try:
-        return (json.loads(body.decode("utf-8")) or {}).get("errors")
-    except Exception:
-        return None
+def _said(exc, body):
+    """An HTTP failure as what Cloudflare said. A token missing one permission is a 403
+    whose body names the permission."""
+    errors = body.get("errors") if isinstance(body, dict) else None
+    if not errors:
+        return web.said(exc, body)
+    return f"HTTP {exc.code}: {_first_error(errors)}"
 
 
 def _first_error(errors):
